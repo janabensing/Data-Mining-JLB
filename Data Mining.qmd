@@ -1,0 +1,864 @@
+---
+title: "Data Mining"
+author: "Jana Bensing"
+format: html
+editor: visual
+---
+
+```{r}
+library(dplyr)
+library(psych)
+library(corrplot)
+library(caret)
+library(tidyverse)
+library(caTools)
+library(e1071)
+library(Boruta)
+```
+
+#Import Data
+
+https://www.kaggle.com/datasets/mrsantos/hcc-dataset?select=hcc-data-complete-balanced.csv
+
+```{r}
+#replace this with your path
+#make sure that all h5 files are in same wd so that they can be loaded in NN-Models
+HCCB <- read.csv('/Users/lusahoffmann/Desktop/Data Mining/Project_FINAL_JLB/hcc-data-complete-balanced.csv') 
+```
+
+```{r}
+summary(HCCB)
+```
+
+```{r}
+class <- as.data.frame(sapply(HCCB, class))
+class
+```
+
+#PREPROCESSING #Recode Columns
+
+--\> Class = Outcome variable; survival after one year 1 = yes, 0 = no --\> if integer --\> factor
+
+```{r}
+HCCB1 <- mutate_if(HCCB, is.character, as.factor) #to avoid NA
+HCCB2 <- mutate_if(HCCB1, is.factor, as.integer) #integer 
+```
+
+```{r}
+data.frame(colnames(HCCB2))
+```
+
+```{r}
+col_fac <- HCCB2[c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,28,29,44,50)] #pick all 2 level factor variables
+```
+
+```{r}
+HCCB3 <-mutate_if(col_fac, is.integer, as.factor)#make to factor
+```
+
+```{r}
+HCCB4 <-  HCCB2[-(c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,28,29,44,50))] #pick all other variables, all numeric +class
+```
+
+```{r}
+HCCB5 <-cbind(HCCB3, HCCB4) #bind together 
+```
+
+#Correlation
+
+##ALL
+
+```{r}
+cor1 <- cor(HCCB2)
+corrplot(cor1)
+```
+
+##Numeric
+
+```{r}
+cor2 <- cor(HCCB4)
+corrplot(cor2)
+```
+
+##Factor
+
+```{r}
+cor3 <- cor(col_fac)
+corrplot(cor3)
+```
+
+#Check Distributions
+
+```{r}
+lm <- lm(Class ~.,HCCB2)
+summary(lm)
+plot(lm)
+```
+
+#Check for NA
+
+```{r}
+sum(is.na(HCCB2)) #0 NA
+na_count <-sapply(HCCB2, function(y) sum(length(which(is.na(y)))))
+na_count 
+```
+
+#Scale and Center
+
+```{r}
+prep <- preProcess(HCCB2[,-(50)], method = c('scale','center'))
+HCCB6 <- predict(prep, HCCB2)
+```
+
+```{r}
+lm2 <- lm(Class ~.,HCCB6) #no big change, two separated classes
+summary(lm2)
+plot(lm2)
+```
+
+##Class as Factor
+
+```{r}
+HCCB6 <- HCCB6%>%
+  mutate(across(c(Class), as.factor))
+
+
+# Define custom labels for factor levels
+level_names <- c("D", "S")
+
+# Set names for factor levels
+levels(HCCB6$Class) <- level_names
+
+# Print the modified factor variable
+print(HCCB6$Class)
+```
+
+#VISUALIZATIONS
+
+##Class Distribution
+
+```{r}
+ggplot(HCCB6, aes(Class, fill = Class) ) +geom_bar() #classes equally balanced
+```
+
+##Numerical Variables
+
+```{r}
+ggplot(HCCB2, aes(x =Albumin) ) + geom_histogram() +facet_grid(Class ~.)
+ggplot(HCCB2, aes(x = Albumin, fill = Class) ) + geom_boxplot()+facet_grid(Class ~.)
+```
+
+```{r}
+#ggplot(HCCB2, aes(x =Albumin) ) + geom_histogram() +facet_grid(Class ~.)
+ggplot(HCCB2, aes(x = ALP, fill = Class) ) + geom_boxplot()+facet_grid(Class ~.)
+```
+
+```{r}
+ggplot(HCCB2, aes(x = Hemoglobin, fill = Class) ) + geom_boxplot()+facet_grid(Class ~.)
+```
+
+```{r}
+#ggplot(HCCB2, aes(x = PS, fill = Class) ) + geom_boxplot()+facet_grid(Class ~.)
+ggplot(HCCB2, aes(PS, fill = Class) ) +geom_bar() +facet_grid(Class~.)
+```
+
+#ANALYSIS
+
+#SUPPORT VECTOR MACHINE
+
+##remove high correlated features
+
+```{r}
+findCorrelation(cor1, cutoff = .7, exact = FALSE, verbose = TRUE)
+```
+
+```{r}
+HCCB7 <- HCCB6 %>% select(-findCorrelation(cor1, cutoff = 0.7))
+#removes two predictors
+```
+
+##Split
+
+```{r}
+set.seed(1)
+
+sample <- sample.split(HCCB7$Class, SplitRatio = 0.7)
+train1 <- subset(HCCB7, sample == TRUE) 
+test1 <- subset(HCCB7, sample == FALSE) 
+```
+
+##Model 1
+
+```{r}
+SVM1 <- svm(Class ~., train1, type = 'C-classification', kernel = 'radial')
+
+SVM1 <- predict(SVM1, test1)
+
+cm1 <-confusionMatrix(SVM1, test1$Class, positive = 'S')
+cm1
+```
+
+##Model 2
+
+```{r}
+SVM2 <- svm(Class ~., train1,, type = 'C-classification', kernel = 'polynomial')
+
+SVM2 <- predict(SVM2, test1)
+
+cm1 <-confusionMatrix(SVM2, test1$Class, positive = 'S')
+cm1
+```
+
+--\> polynomial kernel performs better
+
+##Cross Validation sigma and cost
+
+###Data Format
+
+```{r}
+trainX <-train1[,1:46] #assign independent variables
+trainX
+```
+
+```{r}
+testX <- test1[,1:46]
+```
+
+```{r}
+#setup crossvalidation
+set.seed(2)
+ctrl <- trainControl(method ='cv',
+                     number = 10,
+                 classProbs = TRUE)
+
+#grid search to fine tune SVM
+
+grid <- expand.grid(sigma = c(.01,.015,0.2),
+                      C = c(0.001, 0.01, 0.1, 1,5,10,100))
+
+svm.tune <- train(x =trainX, y = train1$Class, method = 'svmRadial',probablity = TRUE,
+                  metric = 'ROC', tuneGrid = grid, trControl = ctrl)
+```
+
+```{r}
+svm.tune
+```
+
+#CV and PV Model
+
+```{r}
+pred <- predict(svm.tune, testX)
+confusionMatrix(pred, test1$Class, positive = 'S')
+table(test1$Class,pred)
+confusionMatrix <- confusionMatrix(pred, test1$Class, positive = 'S')
+```
+
+#SVM-RFE
+
+--\> uses random forest, unclear how many best performing features they chose
+
+##set up trainControl
+
+```{r}
+control1 <- trainControl(method="cv",
+                           number = 15,
+                           classProbs = TRUE,
+                           summaryFunction = twoClassSummary)
+```
+
+##Model RF
+
+```{r}
+library(caret)
+set.seed(3)
+random_forest <-train(Class~.,train1, method = 'rf', metric = 'ROC', trControl = control1 )
+
+predrf <- predict(random_forest, test1)
+cmrf <- confusionMatrix(predrf, test1$Class, positive = 'S')
+cmrf
+```
+
+##Plot RF
+
+```{r}
+plot(random_forest)
+```
+
+```{r}
+plot(random_forest$finalModel)
+```
+
+```{r}
+
+varrf <- varImp(random_forest$finalModel, sort = TRUE, 
+           n.var = 15, main = "The variables with the most predictive power")
+varrf <-varrf%>%
+  arrange(desc(Overall))
+varrf #10 most important predictors, correlations not removed
+```
+
+##Model 3
+
+```{r}
+SVM_RF <- svm(Class~ Albumin + ALP+Hemoglobin+PS#+GGT+Age+Dir_Bil+AFP+ALT+Total_Bil+Iron+TP+Major_Dim+Creatinine+Sat+INR+Leucocytes+Platelets+Ferritin+MCV+ Symptoms+ Grams_day+Ascites +Nodule
+                , train1, type = 'C-classification', kernel = 'radial', sigma = 0.015, C = 100)
+
+predRF <- predict(SVM_RF, test1)
+
+cmRF <-confusionMatrix(predRF, test1$Class, positive = 'S')
+cmRF
+```
+
+#SVM-Boruta
+
+```{r}
+#Perform Boruta
+set.seed(4)
+boruta_analysis = Boruta(Class ~ ., data=HCCB7, maxRuns=200)
+
+as.data.frame(boruta_analysis$finalDecision)
+```
+
+##Model 4
+
+```{r}
+SVM_B <- svm(Class~ Symptoms+Endemic+Metastasis+Age+PS+Ascites+INR+
+               Hemoglobin+Albumin+Total_Bil+GGT+ALP+ Creatinine+Dir_Bil+Sat + Encephalopathy+ ALT+ Platelets + Major_Dim + Iron
+                , train1, type = 'C-classification', kernel = 'radial', sigma = 0.015, C = 100)
+
+predB <- predict(SVM_B, test1)
+
+cmB <-confusionMatrix(predB, test1$Class, positive = 'S')
+cmB
+
+```
+
+#SVM-PCA
+
+```{r}
+PCA <- prcomp(HCCB6 %>%select(-Class), scale = FALSE, center = FALSE)#already done
+summary(PCA)
+screeplot(PCA)
+PCA_df <- as_tibble(PCA$x)
+```
+
+```{r}
+Class <- (HCCB6$Class) 
+```
+
+```{r}
+PCA_df <- PCA_df%>%select(c(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23))
+  
+PCA_df <- cbind(PCA_df, Class) #add outcome pack to PCA data
+```
+
+##Split
+
+```{r}
+set.seed(5)
+
+sample <- sample.split(PCA_df$Class, SplitRatio = 0.7)
+train2 <- subset(PCA_df, sample == TRUE) 
+test2 <- subset(PCA_df, sample == FALSE) 
+```
+
+##Cumulative Variance
+
+```{r}
+var_ex <- PCA$sdev^2
+var_ex <- var_ex/sum(var_ex)
+var_ex
+
+cumsum = cumsum(var_ex)
+cumsum
+
+pve_table <- tibble(comp = seq(1:ncol(HCCB6 %>% select( -Class))), var_ex, cumsum)
+
+ggplot(pve_table, aes(x = comp, y = cumsum)) + 
+  geom_point() + 
+  geom_abline(intercept = 0.8, color = "red", slope = 0) + 
+  labs(x = "Number of components", y = "Cumulative Variance")
+```
+
+##PC 1 and PC2
+
+```{r}
+PCA_df2 <- as_tibble(PCA$x) #makes df for data PCA was applied to
+
+ggplot(PCA_df2, aes(x = PC1, y = PC2, col = HCCB6$Class)) + geom_point() #not lineary seperable
+```
+
+##Loadings
+
+```{r}
+library(ggfortify)
+autoplot(PCA, data = HCCB6,  colour = 'Class',
+                    loadings = FALSE, loadings.label = TRUE, loadings.colour = "blue")
+```
+
+##PC Distributions
+
+```{r}
+PCA_d <- cbind(as_tibble(HCCB6$Class), as_tibble(PCA$x))
+GGally::ggpairs(PCA_d, columns = 1:5, ggplot2::aes(color = value))
+```
+
+##Model 5
+
+```{r}
+SVM5 <- svm(Class ~., train2,, type = 'C-classification', kernel = 'polynomial')
+
+SVM5 <- predict(SVM5, test2)
+
+cm5 <-confusionMatrix(SVM2, test2$Class, positive = 'S')
+cm5
+```
+
+#SVM-LDA
+
+```{r}
+library(MASS)
+LDA <-lda(Class~., data = HCCB6)
+LDA
+predict_LDA<- predict(LDA,HCCB6)$x%>%
+  as_tibble()%>%
+  cbind(Class = HCCB6$Class)
+ glimpse(predict_LDA)
+```
+
+```{r}
+
+lda_scores <- predict(LDA, HCCB6)$x
+lda_df <- data.frame(lda_scores, Class = HCCB6$Class)
+ggplot(lda_df, aes(x = LD1, y = 0, color = Class)) +
+  geom_point() +
+  labs(x = "LD1", y = "")
+```
+
+##Split
+
+```{r}
+set.seed(6)
+
+sample <- sample.split(predict_LDA$Class, SplitRatio = 0.7)
+train_LDA <- subset(predict_LDA, sample == TRUE) 
+test_LDA <- subset(predict_LDA, sample == FALSE)
+```
+
+##Model 6
+
+```{r}
+trControl_LDA <- trainControl(method = 'cv',
+                            number = 10,
+                            preProcOptions = list(thresh = 0.5),
+                            classProbs = TRUE)
+
+SVM_LDA <- train(Class~.,train_LDA, method = 'svmRadial', metric = 'ROC', trControl = trControl_LDA)
+
+pred_SVM_LDA <- predict(SVM_LDA, test_LDA) 
+cm_LDA <- confusionMatrix(pred_SVM_LDA, test_LDA$Class, positive = 'S')
+cm_LDA
+```
+
+#NEURAL NETWORKS #NN
+
+```{r}
+detach(package:MASS)
+```
+
+```{r}
+library(keras)
+```
+
+##Matrix Data Format
+
+```{r}
+
+train_1nn_x <- train1%>%
+  select(-Class)%>%
+  data.matrix()
+
+train_1nn_y <- to_categorical(matrix(as.numeric(train1$Class)) - 1)
+
+train_1nn_y <- train_1nn_y[,2]
+
+test_1nn_x <- test1%>%
+  select(-Class)%>%
+  data.matrix()
+
+test_1nn_y <-  to_categorical(matrix(as.numeric(test1$Class)) - 1)
+
+ test_1nn_y<- test_1nn_y[,2]
+
+  
+dim(train_1nn_x)
+dim(train_1nn_y) 
+```
+
+##Define 1
+
+```{r}
+model_1nn <- keras_model_sequential()
+
+model_1nn%>%
+  layer_dense(units = 47, activation = 'relu', input_shape = c(47))%>%
+  layer_dense(units = 30, activation = 'relu')%>%
+  layer_dense(units = 16, activation = 'relu')%>%
+  layer_dense(units = 1, activation = 'sigmoid')
+
+```
+
+##Compile 1
+
+```{r}
+model_1nn%>%
+  compile(optimizer = 'adam',
+          loss = 'binary_crossentropy',
+          metric = c('accuracy'))
+summary(model_1nn)
+```
+
+##Validation 1
+
+```{r}
+history <- model_1nn %>% fit(
+  x = test_1nn_x,
+  y = test_1nn_y,
+  epochs = 20,
+  batch_size = 5,
+  validation_split = 0.2
+)
+```
+
+```{r}
+plot(history)
+```
+
+```{r}
+metrics_1nn <- model_1nn %>% evaluate(
+  x = test_1nn_x,
+  y = test_1nn_y
+)
+cat('Loss:', metrics_1nn[[1]], '\n')
+cat('Accuracy:', metrics_1nn[[2]], '\n')
+```
+
+```{r}
+#save_model_weights_hdf5(model_1nn, "model_weights_1.h5")
+```
+
+##NN BEST RESULT
+
+```{r}
+library(keras)
+
+model_loaded1 <- keras_model_sequential() %>%
+  layer_dense(units = 47, activation = 'relu', input_shape = c(47))%>%
+  layer_dense(units = 30, activation = 'relu')%>%
+  layer_dense(units = 16, activation = 'relu')%>%
+  layer_dense(units = 1, activation = 'sigmoid')
+
+# Load the model weights from HDF5 file
+model_loaded1 <- load_model_weights_hdf5(model_loaded1, "model_weights_1.h5")
+
+model_loaded1
+```
+
+```{r}
+model_loaded1%>%
+  compile(optimizer = 'adam',
+          loss = 'binary_crossentropy',
+          metric = c('accuracy'))
+
+model_loaded1 %>%fit(train_1nn_x,train_1nn_y,
+                 epochs = 1)
+
+metrics_loaded1 <- model_loaded1%>%
+  evaluate(x = test_1nn_x,
+           y = test_1nn_y)
+
+cat('Loss:', metrics_loaded1[1])
+cat('Accuracy:', metrics_loaded1[2])
+```
+
+```{r}
+library(caret) 
+
+# Obtain predicted probabilities from the trained model
+predicted_probs_l1 <- model_loaded1 %>% predict(test_1nn_x)
+
+# Convert predicted probabilities to class labels (0 or 1)
+predicted_labels_l1 <- ifelse(predicted_probs_l1 > 0.5, 1, 0)
+
+# Convert predicted_labels and test_5nn_y to factors with the same levels
+predicted_labels_l1 <- factor(predicted_labels_l1, levels = c(0, 1))
+test_labels_l1 <- factor(test_1nn_y, levels = c(0, 1))
+
+# Create confusion matrix
+confusion_matrix_l1 <- confusionMatrix(predicted_labels_l1, test_labels_l1, positive = '1')
+
+# Print the confusion matrix
+print(confusion_matrix_l1)
+```
+
+#NN-PCA --\> use train2 and test2
+
+##Matrix Data Format 2
+
+```{r}
+train_2nn_x <- train2%>%
+  select(-Class)%>%
+  data.matrix()
+
+train_2nn_y <- to_categorical(matrix(as.numeric(train2$Class)) - 1)
+
+train_2nn_y <- train_2nn_y[,2]
+
+test_2nn_x <- test2%>%
+  select(-Class)%>%
+  data.matrix()
+
+test_2nn_y <-  to_categorical(matrix(as.numeric(test2$Class)) - 1)
+
+ test_2nn_y<- test_2nn_y[,2]
+
+  
+dim(train_2nn_x)
+dim(train_2nn_y) 
+```
+
+##Define 2
+
+```{r}
+model_2nn <- keras_model_sequential()
+
+model_2nn%>%
+  layer_dense(units = 23, activation = 'relu', input_shape = c(23))%>%
+  layer_dense(units = 13, activation = 'relu')%>%
+  layer_dense(units = 9, activation = 'relu')%>%
+  layer_dense(units = 1, activation = 'sigmoid')
+
+```
+
+##Compile 2
+
+```{r}
+model_2nn%>%
+  compile(optimizer = 'adam',
+          loss = 'binary_crossentropy',
+          metric = c('accuracy'))
+summary(model_2nn)
+```
+
+##Validation 2
+
+```{r}
+history2 <- model_2nn %>% fit(
+  x = test_2nn_x,
+  y = test_2nn_y,
+  epochs = 20,
+  batch_size = 5,
+  validation_split = 0.2
+)
+```
+
+```{r}
+plot(history2)
+```
+
+```{r}
+metrics_2nn <- model_2nn %>% evaluate(
+  x = test_2nn_x,
+  y = test_2nn_y
+)
+cat('Loss:', metrics_2nn[[1]], '\n')
+cat('Accuracy:', metrics_2nn[[2]], '\n')
+```
+
+```{r}
+#save_model_weights_hdf5(model_2nn, "model_weights_2.h5")
+```
+
+##NN-PCA BEST RESULT
+
+```{r}
+library(keras)
+
+model_loaded2 <- keras_model_sequential() %>%
+ layer_dense(units = 23, activation = 'relu', input_shape = c(23))%>%
+  layer_dense(units = 13, activation = 'relu')%>%
+  layer_dense(units = 9, activation = 'relu')%>%
+  layer_dense(units = 1, activation = 'sigmoid')
+
+# Load the model weights from HDF5 file
+model_loaded2 <- load_model_weights_hdf5(model_loaded2, "model_weights_2.h5")
+
+model_loaded2
+```
+
+```{r}
+model_loaded2%>%
+  compile(optimizer = 'adam',
+          loss = 'binary_crossentropy',
+          metric = c('accuracy'))
+
+model_loaded2 %>%fit(train_2nn_x,train_2nn_y,
+                 epochs = 1)
+
+metrics_loaded2 <- model_loaded2%>%
+  evaluate(x = test_2nn_x,
+           y = test_2nn_y)
+
+cat('Loss:', metrics_loaded2[1])
+cat('Accuracy:', metrics_loaded2[2])
+```
+
+```{r}
+library(caret) 
+
+# Obtain predicted probabilities from the trained model
+predicted_probs_l2 <- model_loaded2 %>% predict(test_2nn_x)
+
+# Convert predicted probabilities to class labels (0 or 1)
+predicted_labels_l2 <- ifelse(predicted_probs_l2 > 0.5, 1, 0)
+
+# Convert predicted_labels and test_5nn_y to factors with the same levels
+predicted_labels_l2 <- factor(predicted_labels_l2, levels = c(0, 1))
+test_labels_l2 <- factor(test_2nn_y, levels = c(0, 1))
+
+# Create confusion matrix
+confusion_matrix_l2 <- confusionMatrix(predicted_labels_l2, test_labels_l2, positive = '1')
+
+# Print the confusion matrix
+print(confusion_matrix_l2)
+```
+
+#NN-LDA
+
+##Matrix Data Format 3
+
+```{r}
+train_3nn_x <- train_LDA%>%
+  select(-Class)%>%
+  data.matrix()
+
+train_3nn_y <- to_categorical(matrix(as.numeric(train_LDA$Class)) - 1)
+
+train_3nn_y <- train_3nn_y[,2]
+
+test_3nn_x <- test_LDA%>%
+  select(-Class)%>%
+  data.matrix()
+
+test_3nn_y <-  to_categorical(matrix(as.numeric(test_LDA$Class)) - 1)
+
+ test_3nn_y<- test_3nn_y[,2]
+
+  
+dim(train_3nn_x)
+dim(train_3nn_y) 
+```
+
+##Define 3
+
+```{r}
+model_3nn <- keras_model_sequential()
+
+model_3nn%>%
+  layer_dense(units = 2, activation = 'relu', input_shape = c(1))%>%
+   layer_dense(units = 2, activation = 'relu')%>%
+  layer_dense(units = 1, activation = 'sigmoid')
+
+```
+
+##Compile 3
+
+```{r}
+model_3nn%>%
+  compile(optimizer = 'adam',
+          loss = 'binary_crossentropy',
+          metric = c('accuracy'))
+summary(model_3nn)
+```
+
+##Validation 3
+
+```{r}
+history3 <- model_3nn %>% fit(
+  x = test_3nn_x,
+  y = test_3nn_y,
+  epochs = 20,
+  batch_size = 5,
+  validation_split = 0.2
+)
+```
+
+```{r}
+plot(history3)
+```
+
+```{r}
+metrics_3nn <- model_3nn %>% evaluate(
+  x = test_3nn_x,
+  y = test_3nn_y
+)
+cat('Loss:', metrics_3nn[[1]], '\n')
+cat('Accuracy:', metrics_3nn[[2]], '\n')
+```
+
+```{r}
+#save_model_weights_hdf5(model_3nn, "model_weights_3.h5")
+```
+
+##NN-LDA BEST MODEL
+
+```{r}
+library(keras)
+
+model_loaded3 <- keras_model_sequential() %>%
+  layer_dense(units = 2, activation = 'relu', input_shape = c(1))%>%
+  layer_dense(units = 2, activation = 'relu')%>%
+  layer_dense(units = 1, activation = 'sigmoid')
+
+# Load the model weights from HDF5 file
+model_loaded3 <- load_model_weights_hdf5(model_loaded3, "model_weights_3.h5")
+
+model_loaded3
+```
+
+```{r}
+model_loaded3%>%
+  compile(optimizer = 'adam',
+          loss = 'binary_crossentropy',
+          metric = c('accuracy'))
+
+model_loaded3 %>%fit(train_3nn_x,train_3nn_y,
+                 epochs = 1)
+
+metrics_loaded3 <- model_loaded3%>%
+  evaluate(x = test_3nn_x,
+           y = test_3nn_y)
+
+cat('Loss:', metrics_loaded3[1])
+cat('Accuracy:', metrics_loaded3[2])
+```
+
+```{r}
+library(caret) 
+
+# Obtain predicted probabilities from the trained model
+predicted_probs_l3 <- model_loaded3 %>% predict(test_3nn_x)
+
+# Convert predicted probabilities to class labels (0 or 1)
+predicted_labels_l3 <- ifelse(predicted_probs_l3 > 0.5, 1, 0)
+
+# Convert predicted_labels and test_5nn_y to factors with the same levels
+predicted_labels_l3 <- factor(predicted_labels_l3, levels = c(0, 1))
+test_labels_l3 <- factor(test_3nn_y, levels = c(0, 1))
+
+# Create confusion matrix
+confusion_matrix_l3 <- confusionMatrix(predicted_labels_l3, test_labels_l3, positive = '1')
+
+# Print the confusion matrix
+print(confusion_matrix_l3)
+```
